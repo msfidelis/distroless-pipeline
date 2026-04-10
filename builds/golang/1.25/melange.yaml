@@ -33,21 +33,29 @@ pipeline:
     runs: |
       set -euo pipefail
 
-      CERT_DIR="${{build.dir}}/certificates"
+      # Melange pode executar com cwd diferente entre ambientes.
+      # Detectamos automaticamente o diretório de certificados.
+      if [ -d "certificates" ]; then
+        CERT_DIR="certificates"
+      elif [ -d "builds/golang/1.25/certificates" ]; then
+        CERT_DIR="builds/golang/1.25/certificates"
+      else
+        CERT_DIR=""
+      fi
+
       STAGING="/usr/local/share/ca-certificates"
 
       mkdir -p "$STAGING"
 
-      # Expande globs manualmente para não falhar em diretório vazio
-      shopt -s nullglob
-      bundles=("$CERT_DIR"/*.pem "$CERT_DIR"/*.crt)
-
-      if [ "${#bundles[@]}" -eq 0 ]; then
-        echo "AVISO: nenhum bundle encontrado em $CERT_DIR — usando apenas CAs Wolfi"
+      if [ -z "$CERT_DIR" ]; then
+        echo "AVISO: diretório de certificados não encontrado — usando apenas CAs Wolfi"
         exit 0
       fi
 
-      for bundle in "${bundles[@]}"; do
+      found_any=0
+      for bundle in "$CERT_DIR"/*.pem "$CERT_DIR"/*.crt; do
+        [ -e "$bundle" ] || continue
+        found_any=1
         bundle_name=$(basename "$bundle" | sed 's/\.[^.]*$//')
         echo "-> Processando bundle: $bundle_name"
 
@@ -68,11 +76,15 @@ pipeline:
         ' "$bundle"
 
         # Conta e valida os certificados extraídos deste bundle
-        extracted=$(ls "$STAGING/${bundle_name}"-*.crt 2>/dev/null | wc -l | tr -d ' ')
-        echo "   Extraídos: ${extracted} certificado(s) de $bundle_name"
+        set -- "$STAGING/${bundle_name}"-*.crt
+        if [ ! -e "$1" ]; then
+          echo "ERRO: nenhum certificado foi extraído do bundle $bundle_name"
+          exit 1
+        fi
 
-        # Valida cada cert extraído com openssl
-        for cert in "$STAGING/${bundle_name}"-*.crt; do
+        extracted=0
+        for cert in "$@"; do
+          extracted=$((extracted + 1))
           if ! openssl x509 -in "$cert" -noout 2>/dev/null; then
             echo "ERRO: certificado inválido extraído: $cert"
             exit 1
@@ -80,7 +92,13 @@ pipeline:
           subject=$(openssl x509 -in "$cert" -noout -subject 2>/dev/null | sed 's/subject=//')
           echo "   -> OK: $subject"
         done
+
+        echo "   Extraídos: ${extracted} certificado(s) de $bundle_name"
       done
+
+      if [ "$found_any" -eq 0 ]; then
+        echo "AVISO: nenhum bundle .pem/.crt encontrado em $CERT_DIR — usando apenas CAs Wolfi"
+      fi
 
   # ── Step 2: regenera o trust store com update-ca-certificates ───────────────
   # Equivalente ao update-ca-certificates do sistema: lê os .crt individuais
