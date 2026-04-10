@@ -1,0 +1,73 @@
+name: golang-1.25-distroless
+
+# Arquiteturas alvo
+archs:
+  - x86_64
+  - aarch64
+
+contents:
+  # Repositórios de pacotes
+  repositories:
+    - https://packages.wolfi.dev/os
+    # Repositório local dos pacotes gerados pelo Melange
+    - "@local packages/"
+
+  # Keyrings para verificação de assinaturas dos pacotes
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    # Chave pública do Melange para verificar o pacote customizado
+    - melange-keyring/melange.rsa.pub
+
+  packages:
+    # === Base Wolfi distroless ===
+    - wolfi-baselayout
+    - glibc-locale-posix
+
+    # === Toolchain Go 1.25 ===
+    - go-1.25
+
+    # === Certificados CA padrão (Wolfi) ===
+    - ca-certificates-bundle
+
+    # === Certificados CA customizados (pacote gerado pelo Melange) ===
+    - ca-certs-custom@local
+
+    # === Dados de timezone ===
+    - tzdata
+
+    # === glibc e dependências de runtime ===
+    - glibc
+
+# Variáveis de ambiente
+environment:
+  PATH: /usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  GOPATH: /go
+  GOROOT: /usr/local/go
+  CGO_ENABLED: "0"
+  GOOS: linux
+  GOARCH: ""  # Resolvido em build-time pelo APKO por arquitetura
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  SSL_CERT_DIR: /etc/ssl/certs
+
+# Contas e usuários
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  # Executa como nonroot por padrão (princípio do menor privilégio)
+  run-as: 65532
+
+# Entrypoint: go binary (usuário define CMD na imagem de aplicação derivada)
+cmd: /usr/local/go/bin/go
+
+# Labels OCI
+annotations:
+  org.opencontainers.image.title: "golang-1.25-distroless"
+  org.opencontainers.image.description: "Imagem distroless Golang 1.25 baseada em Wolfi com certificados CA customizados"
+  org.opencontainers.image.licenses: "Apache-2.0"
+  dev.chainguard.base: "wolfi"
+  dev.chainguard.go-version: "1.25"

@@ -1,0 +1,13 @@
+# Chaves privadas do Melange — NUNCA commitar
+builds/**/melange-keyring/*.rsa
+
+# Pacotes APK gerados localmente
+builds/**/packages/
+
+# Artefatos de build local
+*.tar
+image.tar
+sbom.*.json
+
+# Diretório de specs (documentação interna)
+.specs/
