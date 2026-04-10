@@ -61,23 +61,29 @@ jobs:
             -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/work \
             -w /work \
             cgr.dev/chainguard/melange keygen
-          
-      - name: Extract public key from ephemeral private key
-        run: |
-          # Instala openssl e extrai a chave pública a partir da privada
-          apt-get update -qq && apt-get install -y openssl >/dev/null 2>&1
-          openssl rsa -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
-            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub 2>/dev/null || \
-          openssl pkey -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
-            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub          
 
       - name: Build APK packages with Melange
-        uses: chainguard-dev/actions/melange-build@main
-        with:
-          config: ${{ env.BUILD_DIR }}/melange.yaml
-          signing-key-path: ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
-          archs: x86_64,aarch64,arm64
-          out-dir: ${{ env.BUILD_DIR }}/packages
+        run: |
+          mkdir -p ${{ env.BUILD_DIR }}/packages
+          docker run --rm --privileged \
+            -v "$PWD":/work \
+            -w /work \
+            cgr.dev/chainguard/melange build \
+            ${{ env.BUILD_DIR }}/melange.yaml \
+            --arch x86_64,aarch64 \
+            --signing-key /work/${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            --out-dir /work/${{ env.BUILD_DIR }}/packages
+
+      - name: Validate package output
+        run: |
+          echo "Conteudo de ${{ env.BUILD_DIR }}/packages:"
+          find ${{ env.BUILD_DIR }}/packages -maxdepth 3 -type f | sort || true
+          APK_COUNT=$(find ${{ env.BUILD_DIR }}/packages -type f -name '*.apk' | wc -l | tr -d ' ')
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERRO: nenhum arquivo .apk foi gerado em ${{ env.BUILD_DIR }}/packages"
+            exit 1
+          fi
+          echo "OK: $APK_COUNT pacote(s) .apk gerado(s)."
 
       # Remove a chave privada do disco imediatamente após o build do APK.
       # O runner é descartado após o job de qualquer forma, mas tornamos
@@ -93,7 +99,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apk-packages
-          path: ${{ env.BUILD_DIR }}/packages/
+          path: ${{ env.BUILD_DIR }}/packages/**
+          if-no-files-found: error
           retention-days: 1
 
       # Chave pública é inócua — necessária no job build-image para que o
