@@ -182,11 +182,20 @@ jobs:
       image-digest: ${{ steps.push.outputs.image-digest }}
 
     steps:
-      - name: Download image tar artifact
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK packages artifact
         uses: actions/download-artifact@v4
         with:
-          name: image-tar
-          path: /tmp
+          name: apk-packages
+          path: ${{ env.BUILD_DIR }}/packages
+
+      - name: Download ephemeral public key
+        uses: actions/download-artifact@v4
+        with:
+          name: melange-pubkey
+          path: ${{ env.BUILD_DIR }}/melange-keyring
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -198,11 +207,21 @@ jobs:
       - name: Install crane
         uses: imjasonh/setup-crane@v0.3
 
-      - name: Push image and capture digest
+      - name: Publish image and capture digest
         id: push
         run: |
-          DIGEST=$(crane push /tmp/image.tar \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.image-tag }}")
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.image-tag }}"
+
+          docker run --rm \
+            -v "$PWD":/work \
+            -v "$HOME/.docker":/root/.docker \
+            -w /work/${{ env.BUILD_DIR }} \
+            cgr.dev/chainguard/apko publish \
+            apko.yaml \
+            "$IMAGE_TAG" \
+            --arch x86_64,aarch64
+
+          DIGEST=$(crane digest "$IMAGE_TAG")
           IMAGE_REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
           echo "image-ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
           echo "image-digest=${DIGEST}" >> "$GITHUB_OUTPUT"
