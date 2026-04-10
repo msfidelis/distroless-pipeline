@@ -19,7 +19,7 @@ contents:
   packages:
     # === Base Wolfi distroless ===
     - wolfi-baselayout
-    - glibc-locale-posix
+    # - glibc-locale-posix
 
     # === Toolchain Go 1.25 ===
     - go-1.25
@@ -33,10 +33,10 @@ contents:
     - ca-certs-custom@local
 
     # === Dados de timezone ===
-    - tzdata
+    # - tzdata
 
     # === glibc e dependências de runtime ===
-    - glibc
+    # - glibc
 
 # Variáveis de ambiente
 environment:
