@@ -100,63 +100,44 @@ pipeline:
         echo "AVISO: nenhum bundle .pem/.crt encontrado em $CERT_DIR — usando apenas CAs Wolfi"
       fi
 
-  # ── Step 2: regenera o trust store com update-ca-certificates ───────────────
-  # Equivalente ao update-ca-certificates do sistema: lê os .crt individuais
-  # de /usr/local/share/ca-certificates/ e reconstrói o bundle consolidado
-  # em /etc/ssl/certs/ca-certificates.crt.
-  - name: update-ca-certificates
-    runs: |
-      set -euo pipefail
-
-      # Executa no ambiente de build do Melange (que tem o filesystem completo)
-      update-ca-certificates --fresh 2>&1 | sed 's/^/   /'
-
-      echo "Trust store reconstruído em /etc/ssl/certs/ca-certificates.crt"
-
-  # ── Step 3: instala o bundle e os certs individuais no DESTDIR ──────────────
+  # ── Step 2: instala apenas os certs extras no DESTDIR ───────────────────────
+  # Nao empacotamos /etc/ssl/certs/ca-certificates.crt para evitar conflito
+  # com o pacote oficial ca-certificates-bundle no APKO. O bundle oficial
+  # continua sendo fornecido pelo Wolfi, e este pacote adiciona apenas os CAs
+  # extras em caminhos exclusivos.
   - name: install-to-destdir
     runs: |
       set -euo pipefail
 
       DEST="${{targets.destdir}}"
 
-      mkdir -p "${DEST}/etc/ssl/certs"
       mkdir -p "${DEST}/usr/local/share/ca-certificates"
+      mkdir -p "${DEST}/etc/ssl/certs/custom"
 
-      # Instala o bundle consolidado (resultado do update-ca-certificates)
-      cp /etc/ssl/certs/ca-certificates.crt \
-         "${DEST}/etc/ssl/certs/ca-certificates.crt"
-
-      # Instala os certificados individuais para inspeção e auditoria
+      # Instala os certificados individuais em paths exclusivos do pacote
       if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then
         cp /usr/local/share/ca-certificates/*.crt \
            "${DEST}/usr/local/share/ca-certificates/"
+        cp /usr/local/share/ca-certificates/*.crt \
+           "${DEST}/etc/ssl/certs/custom/"
       fi
 
       # Permissões corretas (read para todos, sem exec)
-      chmod 644 "${DEST}/etc/ssl/certs/ca-certificates.crt"
       find "${DEST}/usr/local/share/ca-certificates" \
            -name "*.crt" -exec chmod 644 {} \;
+      find "${DEST}/etc/ssl/certs/custom" \
+           -name "*.crt" -exec chmod 644 {} \;
 
-  # ── Step 4: valida o bundle final instalado no DESTDIR ──────────────────────
+  # ── Step 3: valida os certs extras instalados no DESTDIR ────────────────────
   - name: validate-bundle
     runs: |
       set -euo pipefail
 
-      BUNDLE="${{targets.destdir}}/etc/ssl/certs/ca-certificates.crt"
-
-      if [ ! -s "$BUNDLE" ]; then
-        echo "ERRO: bundle vazio: $BUNDLE"
-        exit 1
-      fi
-
-      if ! grep -q "BEGIN CERTIFICATE" "$BUNDLE"; then
-        echo "ERRO: bundle sem certificados PEM válidos"
-        exit 1
-      fi
-
-      CERT_COUNT=$(grep -c "BEGIN CERTIFICATE" "$BUNDLE")
       CUSTOM_COUNT=$(ls "${{targets.destdir}}/usr/local/share/ca-certificates"/*.crt \
                        2>/dev/null | wc -l | tr -d ' ')
-      echo "Bundle validado: ${CERT_COUNT} certificado(s) total / ${CUSTOM_COUNT} customizado(s)"
+      if [ "$CUSTOM_COUNT" -eq 0 ]; then
+        echo "ERRO: nenhum certificado customizado foi empacotado"
+        exit 1
+      fi
+      echo "Pacote validado: ${CUSTOM_COUNT} certificado(s) customizado(s) instalados"
 
