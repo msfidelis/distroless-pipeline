@@ -72,15 +72,14 @@ run_apko() {
 step "Gerando par de chaves RSA efêmero"
 if command -v melange &>/dev/null; then
   # Se melange está instalado localmente, roda no diretório temporário
-  (cd "${EPHEMERAL_KEY_DIR}" && melange keygen)
+  (cd "${EPHEMERAL_KEY_DIR}" && melange keygen && chmod 600 melange.rsa)
 else
   # Via Docker
   docker run --rm \
     -v "${EPHEMERAL_KEY_DIR}":/work \
     -w /work \
-    cgr.dev/chainguard/melange keygen
+    sh -c 'melange keygen && chmod 600 melange.rsa'
 fi
-chmod 600 "${EPHEMERAL_PRIVKEY}"
 
 # Extrai a chave pública a partir da privada (OpenSSL)
 openssl rsa -in "${EPHEMERAL_PRIVKEY}" -pubout \

@@ -59,8 +59,7 @@ jobs:
           docker run --rm \
             -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/work \
             -w /work \
-            cgr.dev/chainguard/melange keygen
-          chmod 600 ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
+            sh -c 'melange keygen && chmod 600 melange.rsa'
           
           # Instala openssl e extrai a chave pública a partir da privada
           apt-get update -qq && apt-get install -y openssl >/dev/null 2>&1
