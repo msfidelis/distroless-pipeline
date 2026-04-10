@@ -159,3 +159,4 @@ pipeline:
       CUSTOM_COUNT=$(ls "${{targets.destdir}}/usr/local/share/ca-certificates"/*.crt \
                        2>/dev/null | wc -l | tr -d ' ')
       echo "Bundle validado: ${CERT_COUNT} certificado(s) total / ${CUSTOM_COUNT} customizado(s)"
+
