@@ -46,6 +46,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Melange
+        uses: chainguard-dev/actions/setup-melange@main
+
       # Gera um par de chaves RSA efêmero por build — sem secrets no GitHub.
       # A chave privada existe apenas na memória do runner e nunca é armazenada
       # nem exposta como artifact. Apenas a chave pública (.pub) é repassada
@@ -58,18 +61,23 @@ jobs:
             -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/work \
             -w /work \
             cgr.dev/chainguard/melange keygen
+          
+      - name: Extract public key from ephemeral private key
+        run: |
+          # Instala openssl e extrai a chave pública a partir da privada
+          apt-get update -qq && apt-get install -y openssl >/dev/null 2>&1
+          openssl rsa -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub 2>/dev/null || \
+          openssl pkey -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub          
 
       - name: Build APK packages with Melange
-        run: |
-          mkdir -p ${{ env.BUILD_DIR }}/packages
-          docker run --rm --privileged \
-            -v "$PWD":/work \
-            -w /work \
-            cgr.dev/chainguard/melange build \
-            ${{ env.BUILD_DIR }}/melange.yaml \
-            --arch x86_64,aarch64 \
-            --signing-key ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
-            --out-dir ${{ env.BUILD_DIR }}/packages
+        uses: chainguard-dev/actions/melange-build@main
+        with:
+          config: ${{ env.BUILD_DIR }}/melange.yaml
+          signing-key-path: ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
+          archs: x86_64,aarch64,arm64
+          out-dir: ${{ env.BUILD_DIR }}/packages
 
       # Remove a chave privada do disco imediatamente após o build do APK.
       # O runner é descartado após o job de qualquer forma, mas tornamos
@@ -103,6 +111,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
+      image-digest: ${{ steps.apko-build.outputs.digest }}
       image-tag: ${{ steps.set-tag.outputs.tag }}
 
     steps:
@@ -123,6 +132,9 @@ jobs:
           name: melange-pubkey
           path: ${{ env.BUILD_DIR }}/melange-keyring
 
+      - name: Setup APKO
+        uses: chainguard-dev/actions/setup-apko@main
+
       - name: Determine image tag
         id: set-tag
         run: |
@@ -138,21 +150,18 @@ jobs:
 
       - name: Build image with APKO
         id: apko-build
-        run: |
-          docker run --rm \
-            -v "$PWD":/work \
-            -w /work \
-            cgr.dev/chainguard/apko build \
-            ${{ env.BUILD_DIR }}/apko.yaml \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.tag }} \
-            /work/image.tar \
-            --arch x86_64,aarch64
+        uses: chainguard-dev/actions/apko-build@main
+        with:
+          config: ${{ env.BUILD_DIR }}/apko.yaml
+          tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.tag }}
+          output-tar: /tmp/image.tar
+          archs: x86_64,aarch64
 
       - name: Upload image tar as artifact
         uses: actions/upload-artifact@v4
         with:
           name: image-tar
-          path: image.tar
+          path: /tmp/image.tar
           retention-days: 1
 
   publish:
@@ -163,7 +172,6 @@ jobs:
 
     outputs:
       image-ref: ${{ steps.push.outputs.image-ref }}
-      image-digest: ${{ steps.push.outputs.image-digest }}
 
     steps:
       - name: Download image tar artifact
@@ -189,7 +197,6 @@ jobs:
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.image-tag }}")
           IMAGE_REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
           echo "image-ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
-          echo "image-digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "Imagem publicada: ${IMAGE_REF}"
 
       - name: Tag como latest (apenas push para main)
@@ -249,7 +256,7 @@ jobs:
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ needs.publish.outputs.image-digest }}
+          subject-digest: ${{ needs.build-image.outputs.image-digest }}
           push-to-registry: true
 
   # smoke-test:
