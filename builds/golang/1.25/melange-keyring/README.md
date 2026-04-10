@@ -26,9 +26,11 @@ nem secret no GitHub, nem arquivo commitado.
 
 ```bash
 # Instale melange ou use via Docker
-docker run --rm -v "$PWD":/work cgr.dev/chainguard/melange keygen \
-  --out-key /work/melange.rsa \
-  --out-pub /work/melange.rsa.pub
+docker run --rm -v "$PWD":/keyring cgr.dev/chainguard/melange keygen \
+  -k /keyring/melange.rsa
+
+# Extrai a chave pública (OpenSSL)
+openssl rsa -in melange.rsa -pubout -out melange.rsa.pub
 ```
 
 ## O que commitar

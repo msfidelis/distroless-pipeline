@@ -70,10 +70,14 @@ run_apko() {
 
 # ── Step 1: Gerar chave efêmera ──────────────────────────────────────────────
 step "Gerando par de chaves RSA efêmero"
-run_melange keygen \
-  --out-key "${EPHEMERAL_PRIVKEY}" \
-  --out-pub "${EPHEMERAL_PUBKEY}"
+run_melange keygen -k "${EPHEMERAL_PRIVKEY}"
 chmod 600 "${EPHEMERAL_PRIVKEY}"
+
+# Extrai a chave pública a partir da privada (OpenSSL)
+openssl rsa -in "${EPHEMERAL_PRIVKEY}" -pubout \
+  -out "${EPHEMERAL_PUBKEY}" 2>/dev/null || \
+openssl pkey -in "${EPHEMERAL_PRIVKEY}" -pubout \
+  -out "${EPHEMERAL_PUBKEY}"
 log "Chave efêmera gerada em: ${EPHEMERAL_KEY_DIR} (temporário)"
 
 # Copia a chave pública para o keyring do projeto (referenciada pelo apko.yaml)

@@ -56,10 +56,18 @@ jobs:
       - name: Generate ephemeral Melange signing key
         run: |
           mkdir -p ${{ env.BUILD_DIR }}/melange-keyring
-          melange keygen \
-            --out-key ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
-            --out-pub ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub
+          docker run --rm \
+            -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/keyring \
+            cgr.dev/chainguard/melange keygen -k /keyring/melange.rsa
           chmod 600 ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
+          # Extrai a chave pública a partir da privada (OpenSSL)
+          docker run --rm \
+            -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/keyring \
+            cgr.dev/chainguard/melange --version >/dev/null && \
+          openssl rsa -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub 2>/dev/null || \
+          openssl pkey -in ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            -pubout -out ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub
 
       - name: Build APK packages with Melange
         uses: chainguard-dev/actions/melange-build@main
