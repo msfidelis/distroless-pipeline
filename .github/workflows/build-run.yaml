@@ -35,7 +35,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/run-distroless
   BUILD_DIR: builds/run/latest
-  GO_VERSION: latest
+  VERSION: latest
 
 jobs:
   build-packages:
