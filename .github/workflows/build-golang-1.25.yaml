@@ -157,9 +157,9 @@ jobs:
           docker run --rm \
             -v "$PWD":/work \
             -v /tmp:/tmp \
-            -w /work \
+            -w /work/${{ env.BUILD_DIR }} \
             cgr.dev/chainguard/apko build \
-            ${{ env.BUILD_DIR }}/apko.yaml \
+            apko.yaml \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.tag }} \
             /tmp/image.tar \
             --arch x86_64,aarch64
