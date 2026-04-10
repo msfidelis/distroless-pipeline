@@ -71,3 +71,4 @@ annotations:
   org.opencontainers.image.licenses: "Apache-2.0"
   dev.chainguard.base: "wolfi"
   dev.chainguard.go-version: "1.25"
+
