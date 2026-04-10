@@ -24,10 +24,10 @@ contents:
     # === Toolchain Go 1.25 ===
     - go-1.25
 
-    # === Certificados CA padrão (Wolfi) ===
-    - ca-certificates-bundle
-
     # === Certificados CA customizados (pacote gerado pelo Melange) ===
+    # Este pacote já incorpora o bundle base e adiciona os CAs extras.
+    # Nao instalar ca-certificates-bundle aqui para evitar conflito de arquivo
+    # em /etc/ssl/certs/ca-certificates.crt.
     - ca-certs-custom@local
 
     # === Dados de timezone ===
