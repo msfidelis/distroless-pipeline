@@ -25,12 +25,18 @@ nem secret no GitHub, nem arquivo commitado.
 ## Geração manual (local)
 
 ```bash
-# Instale melange ou use via Docker
-docker run --rm -v "$PWD":/keyring cgr.dev/chainguard/melange keygen \
-  -k /keyring/melange.rsa
+# Rodar em diretório temporário
+mkdir -p /tmp/melange-keys && cd /tmp/melange-keys
+
+# Via Docker (recomendado)
+docker run --rm -v "$PWD":/work -w /work \
+  cgr.dev/chainguard/melange keygen
 
 # Extrai a chave pública (OpenSSL)
 openssl rsa -in melange.rsa -pubout -out melange.rsa.pub
+
+# Copiar para o projeto
+cp melange.rsa.pub /path/to/builds/golang/1.25/melange-keyring/
 ```
 
 ## O que commitar
