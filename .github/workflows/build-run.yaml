@@ -1,0 +1,329 @@
+name: Build Runtime Distroless Image
+
+on:
+  push:
+    paths:
+      - "builds/run/latest/**"
+      - ".github/workflows/build-run.yaml"
+    branches:
+      - main
+
+  schedule:
+    # Toda segunda-feira às 03:00 UTC — rebuild semanal para absorver patches de segurança Wolfi
+    - cron: "0 3 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Tag customizada para a imagem (ex: latest-rc1)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run — build sem push para o registry"
+        type: boolean
+        required: false
+        default: false
+
+# Permissões mínimas necessárias
+permissions:
+  contents: read
+  packages: write       # push para ghcr.io via GITHUB_TOKEN
+  id-token: write       # cosign keyless OIDC
+  attestations: write   # GitHub artifact attestation (SLSA provenance)
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/run-distroless
+  BUILD_DIR: builds/run/latest
+
+jobs:
+  build-packages:
+    name: "Build APK packages (Melange)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Melange
+        uses: chainguard-dev/actions/setup-melange@main
+
+      # Gera um par de chaves RSA efêmero por build — sem secrets no GitHub.
+      # A chave privada existe apenas na memória do runner e nunca é armazenada
+      # nem exposta como artifact. Apenas a chave pública (.pub) é repassada
+      # para o job build-image via artifact.
+      - name: Generate ephemeral Melange signing key
+        run: |
+          mkdir -p ${{ env.BUILD_DIR }}/melange-keyring
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/work \
+            -w /work \
+            cgr.dev/chainguard/melange keygen
+
+      - name: Build APK packages with Melange
+        run: |
+          mkdir -p ${{ env.BUILD_DIR }}/packages
+          docker run --rm --privileged \
+            -v "$PWD":/work \
+            -w /work \
+            cgr.dev/chainguard/melange build \
+            ${{ env.BUILD_DIR }}/melange.yaml \
+            --arch x86_64,aarch64 \
+            --signing-key /work/${{ env.BUILD_DIR }}/melange-keyring/melange.rsa \
+            --out-dir /work/${{ env.BUILD_DIR }}/packages
+
+      - name: Validate package output
+        run: |
+          echo "Conteudo de ${{ env.BUILD_DIR }}/packages:"
+          find ${{ env.BUILD_DIR }}/packages -maxdepth 3 -type f | sort || true
+          APK_COUNT=$(find ${{ env.BUILD_DIR }}/packages -type f -name '*.apk' | wc -l | tr -d ' ')
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERRO: nenhum arquivo .apk foi gerado em ${{ env.BUILD_DIR }}/packages"
+            exit 1
+          fi
+          echo "OK: $APK_COUNT pacote(s) .apk gerado(s)."
+
+      - name: Shred ephemeral private key
+        if: always()
+        run: |
+          shred -u ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa 2>/dev/null || \
+            rm -f ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
+          echo "Chave privada efêmera removida."
+
+      - name: Upload packages as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-packages
+          path: ${{ env.BUILD_DIR }}/packages/**
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload ephemeral public key as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: melange-pubkey
+          path: ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa.pub
+          retention-days: 1
+
+  build-image:
+    name: "Build OCI image (APKO)"
+    needs: build-packages
+    runs-on: ubuntu-latest
+
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apk-packages
+          path: ${{ env.BUILD_DIR }}/packages
+
+      # Baixa a chave pública efêmera gerada no job build-packages.
+      # O APKO usa esta chave para verificar a assinatura dos pacotes @local.
+      - name: Download ephemeral public key
+        uses: actions/download-artifact@v4
+        with:
+          name: melange-pubkey
+          path: ${{ env.BUILD_DIR }}/melange-keyring
+
+      - name: Determine image tag
+        id: set-tag
+        run: |
+          if [[ -n "${{ github.event.inputs.tag_override }}" ]]; then
+            TAG="${{ github.event.inputs.tag_override }}"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            TAG="${{ env.GO_VERSION }}-$(date +%Y%m%d)"
+          else
+            SHA="${{ github.sha }}"
+            TAG="${{ env.GO_VERSION }}-${SHA::8}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image with APKO
+        id: apko-build
+        run: |
+          docker run --rm \
+            -v "$PWD":/work \
+            -v /tmp:/tmp \
+            -w /work/${{ env.BUILD_DIR }} \
+            cgr.dev/chainguard/apko build \
+            apko.yaml \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.tag }} \
+            /tmp/image.tar \
+            --arch x86_64,aarch64
+
+      - name: Upload image tar as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-tar
+          path: /tmp/image.tar
+          retention-days: 1
+
+  publish:
+    name: "Publish image to registry"
+    needs: build-image
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+
+    outputs:
+      image-ref: ${{ steps.push.outputs.image-ref }}
+      image-digest: ${{ steps.push.outputs.image-digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apk-packages
+          path: ${{ env.BUILD_DIR }}/packages
+
+      - name: Download ephemeral public key
+        uses: actions/download-artifact@v4
+        with:
+          name: melange-pubkey
+          path: ${{ env.BUILD_DIR }}/melange-keyring
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.3
+
+      - name: Publish image and capture digest
+        id: push
+        run: |
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.image-tag }}"
+
+          docker run --rm \
+            -v "$PWD":/work \
+            -v "$HOME/.docker":/root/.docker \
+            -w /work/${{ env.BUILD_DIR }} \
+            cgr.dev/chainguard/apko publish \
+            apko.yaml \
+            "$IMAGE_TAG" \
+            --arch x86_64,aarch64
+
+          DIGEST=$(crane digest "$IMAGE_TAG")
+          IMAGE_REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+          echo "image-ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          echo "image-digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Imagem publicada: ${IMAGE_REF}"
+
+      - name: Tag como latest (apenas push para main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          crane tag \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.image-tag }}" \
+            latest
+
+  sign-and-attest:
+    name: "Sign image and attach SBOM"
+    needs: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install Syft (SBOM generator)
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image with keyless Cosign (Sigstore)
+        run: |
+          cosign sign --yes \
+            "${{ needs.publish.outputs.image-ref }}"
+
+      - name: Generate SBOM in SPDX format
+        run: |
+          syft "${{ needs.publish.outputs.image-ref }}" \
+            -o spdx-json=/tmp/sbom.spdx.json \
+            -o cyclonedx-json=/tmp/sbom.cyclonedx.json
+
+      - name: Attach SBOM as attestation (SPDX)
+        run: |
+          cosign attest --yes \
+            --predicate /tmp/sbom.spdx.json \
+            --type spdx \
+            "${{ needs.publish.outputs.image-ref }}"
+
+      - name: Upload SBOM as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            /tmp/sbom.spdx.json
+            /tmp/sbom.cyclonedx.json
+          retention-days: 90
+
+      - name: GitHub SLSA provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ needs.publish.outputs.image-digest }}
+          push-to-registry: true
+
+  # smoke-test:
+  #   name: "Smoke tests + vulnerability scan"
+  #   needs: [publish, sign-and-attest]
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+
+  #     - name: Login to GitHub Container Registry
+  #       uses: docker/login-action@v3
+  #       with:
+  #         registry: ${{ env.REGISTRY }}
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.GITHUB_TOKEN }}
+
+  #     - name: Pull image
+  #       run: |
+  #         docker pull "${{ needs.publish.outputs.image-ref }}"
+
+  #     - name: Run smoke tests
+  #       run: |
+  #         chmod +x ${{ env.BUILD_DIR }}/tests/smoke.sh
+  #         ${{ env.BUILD_DIR }}/tests/smoke.sh \
+  #           "${{ needs.publish.outputs.image-ref }}"
+
+  #     - name: Run Grype vulnerability scan
+  #       uses: anchore/scan-action@v3
+  #       with:
+  #         image: ${{ needs.publish.outputs.image-ref }}
+  #         fail-build: true
+  #         severity-cutoff: critical
+  #         output-format: table
+
+  #     - name: Install Cosign (para verificação)
+  #       uses: sigstore/cosign-installer@v3
+
+  #     - name: Verify image signature
+  #       run: |
+  #         cosign verify \
+  #           --certificate-identity-regexp \
+  #             "https://github.com/${{ github.repository }}/.github/workflows/build-golang-1.25.yaml@refs/heads/main" \
+  #           --certificate-oidc-issuer \
+  #             "https://token.actions.githubusercontent.com" \
+  #           "${{ needs.publish.outputs.image-ref }}"
+  #         echo "Assinatura verificada com sucesso."
