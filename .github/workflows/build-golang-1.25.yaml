@@ -57,6 +57,7 @@ jobs:
         run: |
           mkdir -p ${{ env.BUILD_DIR }}/melange-keyring
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "$PWD/${{ env.BUILD_DIR }}/melange-keyring":/work \
             -w /work \
             cgr.dev/chainguard/melange keygen
@@ -75,7 +76,7 @@ jobs:
         with:
           config: ${{ env.BUILD_DIR }}/melange.yaml
           signing-key-path: ${{ env.BUILD_DIR }}/melange-keyring/melange.rsa
-          archs: x86_64,arch64,amd64
+          archs: x86_64,aarch64,arm64
           out-dir: ${{ env.BUILD_DIR }}/packages
 
       # Remove a chave privada do disco imediatamente após o build do APK.
@@ -154,7 +155,7 @@ jobs:
           config: ${{ env.BUILD_DIR }}/apko.yaml
           tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.tag }}
           output-tar: /tmp/image.tar
-          archs: x86_64,aarch64,arm64
+          archs: x86_64,aarch64
 
       - name: Upload image tar as artifact
         uses: actions/upload-artifact@v4
